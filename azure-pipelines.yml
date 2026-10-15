@@ -2,7 +2,7 @@ trigger:
   - main
 
 pool:
-  vmImage: 'ubutu-latest'
+  vmImage: 'ubuntu-latest'
 
 variables:
   pythonVersion: '3.12'
