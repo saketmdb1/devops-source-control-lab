@@ -1,4 +1,4 @@
 
-flask==3.1.0
+Flask
 pytest==8.3.4
 requests==2.32.3
