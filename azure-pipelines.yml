@@ -46,6 +46,4 @@ steps:
       buildContext: '$(Build.SourceDirectory)'
       tags: |
         $(build.BuildId)
-        
-
 
