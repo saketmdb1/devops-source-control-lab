@@ -46,4 +46,5 @@ steps:
       buildContext: '$(Build.SourcesDirectory)'
       tags: |
         $(build.BuildId)
+        latest
 
