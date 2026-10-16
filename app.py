@@ -1,6 +1,11 @@
 def get_message():
     return "Hello from DevOps!"
 
+def login(username):
+    if not username:
+        raise ValueError("Username is required")
+    return f"Welcome, {username}!"
+
 
 def login(username):
     if not username:
