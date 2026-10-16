@@ -31,3 +31,7 @@ steps:
   - script: 
       python -m pytest -v
     displayName: 'run unit tests'
+  
+  - script:
+      docker build -t devops-source-control-lab:$(Build.BuildId) .
+    displayName: 'Build Docker Image'
