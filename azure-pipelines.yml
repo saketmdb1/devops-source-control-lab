@@ -35,3 +35,17 @@ steps:
   - script:
       docker build -t devops-source-control-lab:$(Build.BuildId) .
     displayName: 'Build Docker Image'
+
+  - task: Dcoker@2
+    displayName: 'Build and push docker Image'
+    inputs:
+      command: buildAndPush
+      containerRegistry: 'sc-acrdevopsla'
+      repository: 'devops-source-control-lab'
+      Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+      buildContext: '$(Build.SourceDirectory)'
+      tags: |
+        $(build.BuildId)
+        
+
+
