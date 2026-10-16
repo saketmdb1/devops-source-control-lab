@@ -43,7 +43,7 @@ steps:
       containerRegistry: 'sc-acrdevopsla'
       repository: 'devops-source-control-lab'
       Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
-      buildContext: '$(Build.SourceDirectory)'
+      buildContext: '$(Build.SourcesDirectory)'
       tags: |
         $(build.BuildId)
 
