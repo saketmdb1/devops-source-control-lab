@@ -2,7 +2,7 @@ from app import get_message, login
 
 
 def test_get_message():
-    assert get_message() == "Hello from DevOps!"
+    assert get_message() == "Hello from DevOps"
 
 
 def test_login():
