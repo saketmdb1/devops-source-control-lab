@@ -1,3 +1,4 @@
+
 trigger:
   branches:
     include:
@@ -13,38 +14,54 @@ pool:
 
 variables:
   pythonVersion: '3.12'
+  acrServiceConnection: 'sc-acrdevopsla'
+  azureServiceConnection: 'sc-azure-deploy'
+  imageRepository: 'devops-source-control-lab'
+  containerAppName: 'ca-devops-lab'
+  resourceGroup: 'acr-rg-devops'
 
 steps:
   - checkout: self
-    displayName: 'checkout souce code'
+    displayName: 'Checkout source code'
 
   - task: UsePythonVersion@0
-    displayName: 'set up python'
+    displayName: 'Set up Python'
     inputs:
       versionSpec: '$(pythonVersion)'
 
   - script: |
       python -m pip install --upgrade pip
       python -m pip install Flask pytest
-    displayName: 'Install Test dependencies'
-  
-  - script: 
+    displayName: 'Install test dependencies'
+
+  - script: |
       python -m pytest -v
-    displayName: 'run unit tests'
-  
-  - script:
-      docker build -t devops-source-control-lab:$(Build.BuildId) .
-    displayName: 'Build Docker Image'
-    
+    displayName: 'Run unit tests'
+
   - task: Docker@2
-    displayName: 'Build and push docker Image'
+    displayName: 'Build and push Docker image'
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
     inputs:
       command: buildAndPush
-      containerRegistry: 'sc-acrdevopsla'
-      repository: 'devops-source-control-lab'
+      containerRegistry: '$(acrServiceConnection)'
+      repository: '$(imageRepository)'
       Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
       buildContext: '$(Build.SourcesDirectory)'
       tags: |
-        $(build.BuildId)
+        $(Build.BuildId)
         latest
 
+  - task: AzureCLI@2
+    displayName: 'Deploy to Azure Container Apps'
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    inputs:
+      azureSubscription: '$(azureServiceConnection)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az config set extension.use_dynamic_install=yes_without_prompt
+
+        az containerapp update \
+          --name "$(containerAppName)" \
+          --resource-group "$(resourceGroup)" \
+          --image "acrdevopsla.azurecr.io/$(imageRepository):$(Build.BuildId)"
