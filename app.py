@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return jsonify(message="Hello from Azure Container Apps!")
+    return jsonify(message="Hello from Azure Container Apps!Deployment Added")
 
 
 @app.route("/health")
