@@ -1,8 +1,8 @@
-
 trigger:
   branches:
     include:
       - main
+      - release/*
 
 pr:
   branches:
@@ -14,54 +14,242 @@ pool:
 
 variables:
   pythonVersion: '3.12'
+
+  # Azure DevOps service connections
   acrServiceConnection: 'sc-acrdevopsla'
   azureServiceConnection: 'sc-azure-deploy'
+
+  # Azure Container Registry
+  registryLoginServer: 'acrdevopsla.azurecr.io'
   imageRepository: 'devops-source-control-lab'
-  containerAppName: 'ca-devops-lab'
+
+  # Azure resources
   resourceGroup: 'acr-rg-devops'
+  webAppDevName: 'as-devops-dev'
+  webAppProdName: 'as-devops-prod'
 
-steps:
-  - checkout: self
-    displayName: 'Checkout source code'
+stages:
 
-  - task: UsePythonVersion@0
-    displayName: 'Set up Python'
-    inputs:
-      versionSpec: '$(pythonVersion)'
+# ============================================================
+# STAGE 1: TEST, BUILD AND PUBLISH IMAGE
+# ============================================================
+- stage: BuildAndPublish
+  displayName: 'Test, Build and Publish'
 
-  - script: |
-      python -m pip install --upgrade pip
-      python -m pip install Flask pytest
-    displayName: 'Install test dependencies'
+  jobs:
+  - job: Build
+    displayName: 'Run tests and publish image'
 
-  - script: |
-      python -m pytest -v
-    displayName: 'Run unit tests'
+    steps:
+    - checkout: self
+      displayName: 'Checkout source code'
 
-  - task: Docker@2
-    displayName: 'Build and push Docker image'
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-    inputs:
-      command: buildAndPush
-      containerRegistry: '$(acrServiceConnection)'
-      repository: '$(imageRepository)'
-      Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
-      buildContext: '$(Build.SourcesDirectory)'
-      tags: |
-        $(Build.BuildId)
-        latest
+    - task: UsePythonVersion@0
+      displayName: 'Set up Python'
+      inputs:
+        versionSpec: '$(pythonVersion)'
 
-  - task: AzureCLI@2
-    displayName: 'Deploy to Azure Container Apps'
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-    inputs:
-      azureSubscription: '$(azureServiceConnection)'
-      scriptType: bash
-      scriptLocation: inlineScript
-      inlineScript: |
-        az config set extension.use_dynamic_install=yes_without_prompt
+    - script: |
+        python -m pip install --upgrade pip
+        python -m pip install Flask pytest
+      displayName: 'Install test dependencies'
 
-        az containerapp update \
-          --name "$(containerAppName)" \
-          --resource-group "$(resourceGroup)" \
-          --image "acrdevopsla.azurecr.io/$(imageRepository):$(Build.BuildId)"
+    - script: |
+        python -m pytest -v
+      displayName: 'Run unit tests'
+
+    # Main branch: publish build ID and latest tags
+    - task: Docker@2
+      displayName: 'Build and push main image'
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+      inputs:
+        command: 'buildAndPush'
+        containerRegistry: '$(acrServiceConnection)'
+        repository: '$(imageRepository)'
+        Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        buildContext: '$(Build.SourcesDirectory)'
+        tags: |
+          $(Build.BuildId)
+          latest
+
+    # Release branch: publish build ID and version tags
+    - task: Docker@2
+      displayName: 'Build and push release image'
+      condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
+      inputs:
+        command: 'buildAndPush'
+        containerRegistry: '$(acrServiceConnection)'
+        repository: '$(imageRepository)'
+        Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        buildContext: '$(Build.SourcesDirectory)'
+        tags: |
+          $(Build.BuildId)
+          $(Build.SourceBranchName)
+
+
+# ============================================================
+# STAGE 2: DEPLOY MAIN TO DEVELOPMENT APP SERVICE
+# ============================================================
+- stage: DeployDev
+  displayName: 'Deploy to Development'
+  dependsOn: BuildAndPublish
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+
+  jobs:
+  - job: DeployDevApp
+    displayName: 'Deploy and verify Dev App Service'
+
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Deploy image and verify health'
+      inputs:
+        azureSubscription: '$(azureServiceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -e
+
+          IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.BuildId)"
+
+          echo "Deploying $IMAGE to $(webAppDevName)"
+
+          # Configure managed identity authentication for ACR pulls
+          az webapp config set \
+            --resource-group "$(resourceGroup)" \
+            --name "$(webAppDevName)" \
+            --generic-configurations '{"acrUseManagedIdentityCreds": true}'
+
+          # Configure the Docker image
+          az webapp config container set \
+            --resource-group "$(resourceGroup)" \
+            --name "$(webAppDevName)" \
+            --container-image-name "$IMAGE" \
+            --container-registry-url "https://$(registryLoginServer)"
+
+          # Ensure the Flask container port is configured
+          az webapp config appsettings set \
+            --resource-group "$(resourceGroup)" \
+            --name "$(webAppDevName)" \
+            --settings WEBSITES_PORT=8000
+
+          # Restart the application
+          az webapp restart \
+            --resource-group "$(resourceGroup)" \
+            --name "$(webAppDevName)"
+
+          # Get the App Service hostname
+          FQDN=$(az webapp show \
+            --resource-group "$(resourceGroup)" \
+            --name "$(webAppDevName)" \
+            --query defaultHostName \
+            --output tsv)
+
+          if [ -z "$FQDN" ] || [ "$FQDN" = "null" ]; then
+            echo "ERROR: Development hostname not found."
+            exit 1
+          fi
+
+          echo "Checking https://$FQDN/health"
+
+          # Retry health check for approximately 2 minutes
+          for i in {1..12}; do
+            if curl --fail --silent --show-error \
+              "https://$FQDN/health"; then
+              echo ""
+              echo "Development health check passed."
+              exit 0
+            fi
+
+            echo "Attempt $i failed. Retrying in 10 seconds."
+            sleep 10
+          done
+
+          echo "ERROR: Development health check failed."
+          exit 1
+
+
+# ============================================================
+# STAGE 3: DEPLOY RELEASE TO PRODUCTION APP SERVICE
+# ============================================================
+- stage: DeployRelease
+  displayName: 'Deploy Release to Production'
+  dependsOn: BuildAndPublish
+  condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
+
+  jobs:
+  - deployment: ReleaseDeployment
+    displayName: 'Deploy approved release'
+
+    # Approval is configured in Azure DevOps Environments
+    environment: 'appservice-production'
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - task: AzureCLI@2
+            displayName: 'Deploy release and verify health'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -e
+
+                IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.SourceBranchName)"
+
+                echo "Deploying $IMAGE to $(webAppProdName)"
+
+                # Configure managed identity authentication for ACR pulls
+                az webapp config set \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppProdName)" \
+                  --generic-configurations '{"acrUseManagedIdentityCreds": true}'
+
+                # Configure the versioned release image
+                az webapp config container set \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppProdName)" \
+                  --container-image-name "$IMAGE" \
+                  --container-registry-url "https://$(registryLoginServer)"
+
+                # Ensure the Flask container port is configured
+                az webapp config appsettings set \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppProdName)" \
+                  --settings WEBSITES_PORT=8000
+
+                # Restart the application
+                az webapp restart \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppProdName)"
+
+                # Get the Production hostname
+                FQDN=$(az webapp show \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppProdName)" \
+                  --query defaultHostName \
+                  --output tsv)
+
+                if [ -z "$FQDN" ] || [ "$FQDN" = "null" ]; then
+                  echo "ERROR: Production hostname not found."
+                  exit 1
+                fi
+
+                echo "Checking https://$FQDN/health"
+
+                for i in {1..12}; do
+                  if curl --fail --silent --show-error \
+                    "https://$FQDN/health"; then
+                    echo ""
+                    echo "Production health check passed."
+                    exit 0
+                  fi
+
+                  echo "Attempt $i failed. Retrying in 10 seconds."
+                  sleep 10
+                done
+
+                echo "ERROR: Production health check failed."
+                exit 1
