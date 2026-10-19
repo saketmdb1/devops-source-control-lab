@@ -26,6 +26,7 @@ variables:
   # Azure resources
   resourceGroup: 'acr-rg-devops'
   webAppDevName: 'as-devops-dev'
+  webAppUatName: 'as-devops-uat'
   webAppProdName: 'as-devops-prod'
 
 stages:
@@ -168,28 +169,26 @@ stages:
           exit 1
 
 
-# ============================================================
-# STAGE 3: DEPLOY RELEASE TO PRODUCTION APP SERVICE
-# ============================================================
-- stage: DeployRelease
-  displayName: 'Deploy Release to Production'
-  dependsOn: BuildAndPublish
-  condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
+# STAGE 3: DEPLOY TO UAT
+- stage: DeployUAT
+  displayName: 'Deploy to UAT'
+  dependsOn: DeployDev
+  condition: and(
+    succeeded(),
+    eq(variables['Build.SourceBranch'], 'refs/heads/main')
+    )
 
   jobs:
-  - deployment: ReleaseDeployment
-    displayName: 'Deploy approved release'
-
-    # Approval is configured in Azure DevOps Environments
-    environment: 'appservice-production'
+  - deployment: DeployUATApp
+    displayName: 'Deploy and verify UAT App Service'
+    environment: 'appservice-uat'
 
     strategy:
       runOnce:
         deploy:
           steps:
-
           - task: AzureCLI@2
-            displayName: 'Deploy release and verify health'
+            displayName: 'Deploy image and verify UAT health'
             inputs:
               azureSubscription: '$(azureServiceConnection)'
               scriptType: 'bash'
@@ -197,35 +196,111 @@ stages:
               inlineScript: |
                 set -e
 
-                IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.SourceBranchName)"
+                IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.BuildId)"
+
+                echo "Deploying $IMAGE to $(webAppUatName)"
+
+                az webapp config set \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppUatName)" \
+                  --generic-configurations '{"acrUseManagedIdentityCreds": true}'
+
+                az webapp config container set \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppUatName)" \
+                  --container-image-name "$IMAGE" \
+                  --container-registry-url "https://$(registryLoginServer)"
+
+                az webapp config appsettings set \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppUatName)" \
+                  --settings WEBSITES_PORT=8000
+
+                az webapp restart \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppUatName)"
+
+                FQDN=$(az webapp show \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(webAppUatName)" \
+                  --query defaultHostName \
+                  --output tsv)
+
+                if [ -z "$FQDN" ] || [ "$FQDN" = "null" ]; then
+                  echo "ERROR: UAT hostname not found."
+                  exit 1
+                fi
+
+                echo "Checking https://$FQDN/health"
+
+                for i in {1..12}; do
+                  if curl --fail --silent --show-error \
+                    "https://$FQDN/health"; then
+                    echo ""
+                    echo "UAT health check passed."
+                    exit 0
+                  fi
+
+                  echo "Attempt $i failed. Retrying in 10 seconds."
+                  sleep 10
+                done
+
+                echo "ERROR: UAT health check failed."
+                exit 1
+
+
+
+# STAGE 4: DEPLOY TO PRODUCTION
+- stage: DeployProd
+  displayName: 'Deploy to Production'
+  dependsOn: DeployUAT
+  condition: and(
+    succeeded(),
+    eq(variables['Build.SourceBranch'], 'refs/heads/main')
+    )
+
+  jobs:
+  - deployment: DeployProdApp
+    displayName: 'Deploy approved release'
+    environment: 'appservice-production'
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            displayName: 'Deploy image and verify Production health'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -e
+
+                IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.BuildId)"
 
                 echo "Deploying $IMAGE to $(webAppProdName)"
 
-                # Configure managed identity authentication for ACR pulls
                 az webapp config set \
                   --resource-group "$(resourceGroup)" \
                   --name "$(webAppProdName)" \
                   --generic-configurations '{"acrUseManagedIdentityCreds": true}'
 
-                # Configure the versioned release image
                 az webapp config container set \
                   --resource-group "$(resourceGroup)" \
                   --name "$(webAppProdName)" \
                   --container-image-name "$IMAGE" \
                   --container-registry-url "https://$(registryLoginServer)"
 
-                # Ensure the Flask container port is configured
                 az webapp config appsettings set \
                   --resource-group "$(resourceGroup)" \
                   --name "$(webAppProdName)" \
                   --settings WEBSITES_PORT=8000
 
-                # Restart the application
                 az webapp restart \
                   --resource-group "$(resourceGroup)" \
                   --name "$(webAppProdName)"
 
-                # Get the Production hostname
                 FQDN=$(az webapp show \
                   --resource-group "$(resourceGroup)" \
                   --name "$(webAppProdName)" \
