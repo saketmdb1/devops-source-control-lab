@@ -2,14 +2,25 @@
 from app import app
 
 
-def test_home():
+def test_home_returns_expected_message():
     client = app.test_client()
-    response = client.get("/")
-    assert response.status_code == 200
-    assert response.json["message"] == "Hello from Azure Container Apps!Deployment Added"
 
-def test_health():
+    response = client.get("/")
+
+    assert response.status_code == 600
+    assert response.is_json
+    assert response.get_json() == {
+        "message": "Hello from Azure Container Apps!Deployment Added"
+    }
+
+
+def test_health_returns_healthy():
     client = app.test_client()
+
     response = client.get("/health")
+
     assert response.status_code == 200
-    assert response.json["status"] == "healthy"
+    assert response.is_json
+    assert response.get_json() == {
+        "status": "healthy"
+    }
