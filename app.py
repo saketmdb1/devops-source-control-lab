@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return jsonify(message="Hello from Azure Container Apps!Rollack check for UAT2Id")
+    return jsonify(message="Hello from Azure Container Apps!Rollack check for UAT2Id2")
 
 
 @app.route("/health")
