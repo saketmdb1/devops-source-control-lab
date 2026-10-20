@@ -168,9 +168,6 @@ stages:
           echo "ERROR: Development health check failed."
           exit 1
 
-# ============================================================
-# STAGE 3: DEPLOY TO UAT APP SERVce
-# ============================================================
 
 - task: AzureCLI@2
   displayName: 'Deploy UAT with automatic rollback'
@@ -324,6 +321,176 @@ stages:
 
       echo "UAT deployment and health check completed successfully."
 
+
+# STAGE 3: DEPLOY TO UAT
+- stage: DeployUAT
+  displayName: 'Deploy to UAT'
+  dependsOn: DeployDev
+  condition: and(
+    succeeded(),
+    eq(variables['Build.SourceBranch'], 'refs/heads/main')
+    )
+
+  jobs:
+  - deployment: DeployUATApp
+    displayName: 'Deploy and verify UAT App Service'
+    environment: 'appservice-uat'
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:          
+          - task: AzureCLI@2
+            displayName: 'Deploy UAT with automatic rollback'
+            inputs:
+              azureSubscription: 'sc-azure-deploy'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -u
+
+                RG="acr-rg-devops"
+                APP="as-devops-uat"
+                REGISTRY="$(registryLoginServer)"
+                REPOSITORY="$(imageRepository)"
+                NEW_IMAGE="${REGISTRY}/${REPOSITORY}:$(Build.BuildId)"
+                HEALTH_URL="https://${APP}.azurewebsites.net/health"
+
+                echo "Reading the currently configured UAT image..."
+
+                CURRENT_CONFIG=$(az webapp config container show \
+                  --resource-group "$RG" \
+                  --name "$APP" \
+                  --query "[?name=='DOCKER_CUSTOM_IMAGE_NAME'].value | [0]" \
+                  --output tsv) || exit 1
+
+                if [ -z "$CURRENT_CONFIG" ] || [ "$CURRENT_CONFIG" = "None" ]; then
+                  echo "ERROR: Could not identify the current UAT image."
+                  exit 1
+                fi
+
+                # Remove Azure's DOCKER| prefix before passing the image to Azure CLI.
+                PREVIOUS_IMAGE="${CURRENT_CONFIG#DOCKER|}"
+
+                echo "Previous image: $PREVIOUS_IMAGE"
+                echo "Target image:   $NEW_IMAGE"
+
+                if [ "$PREVIOUS_IMAGE" = "$NEW_IMAGE" ]; then
+                  echo "The target image is already configured. Continuing with health verification."
+                fi
+
+                # Deploy the new image. If configuration fails, attempt rollback.
+                if ! az webapp config container set \
+                  --resource-group "$RG" \
+                  --name "$APP" \
+                  --container-image-name "$NEW_IMAGE" \
+                  --container-registry-url "https://${REGISTRY}"; then
+                  echo "ERROR: New image configuration failed. Attempting rollback."
+                  DEPLOY_FAILED=1
+                else
+                  DEPLOY_FAILED=0
+                fi
+
+                if [ "$DEPLOY_FAILED" -eq 0 ]; then
+                  if ! az webapp config set \
+                    --resource-group "$RG" \
+                    --name "$APP" \
+                    --generic-configurations '{"acrUseManagedIdentityCreds": true}'; then
+                    echo "ERROR: Failed to configure managed identity for ACR pulls."
+                    DEPLOY_FAILED=1
+                  fi
+                fi
+
+                if [ "$DEPLOY_FAILED" -eq 0 ]; then
+                  if ! az webapp config appsettings set \
+                    --resource-group "$RG" \
+                    --name "$APP" \
+                    --settings WEBSITES_PORT=8000; then
+                    echo "ERROR: Failed to configure the application port."
+                    DEPLOY_FAILED=1
+                  fi
+                fi
+
+                if [ "$DEPLOY_FAILED" -eq 0 ]; then
+                  if ! az webapp restart --resource-group "$RG" --name "$APP"; then
+                    echo "ERROR: App Service restart command failed."
+                    DEPLOY_FAILED=1
+                  fi
+                fi
+
+                # Retry the new deployment's health check.
+                if [ "$DEPLOY_FAILED" -eq 0 ]; then
+                  HEALTHY=0
+
+                  for attempt in $(seq 1 12); do
+                    echo "UAT health check attempt $attempt of 12..."
+
+                    if curl --fail --silent --show-error "$HEALTH_URL"; then
+                      echo "UAT health check passed."
+                      HEALTHY=1
+                      break
+                    fi
+
+                    sleep 10
+                  done
+
+                  if [ "$HEALTHY" -ne 1 ]; then
+                    echo "ERROR: New deployment failed its health check."
+                    DEPLOY_FAILED=1
+                  fi
+                fi
+
+                # On any deployment or health-check failure, restore the prior image.
+                if [ "$DEPLOY_FAILED" -ne 0 ]; then
+                  echo "Rolling UAT back to: $PREVIOUS_IMAGE"
+
+                  if ! az webapp config container set \
+                    --resource-group "$RG" \
+                    --name "$APP" \
+                    --container-image-name "$PREVIOUS_IMAGE" \
+                    --container-registry-url "https://${REGISTRY}"; then
+                    echo "CRITICAL: Could not restore the previous image configuration."
+                    exit 1
+                  fi
+
+                  if ! az webapp config set \
+                    --resource-group "$RG" \
+                    --name "$APP" \
+                    --generic-configurations '{"acrUseManagedIdentityCreds": true}'; then
+                    echo "CRITICAL: Could not restore the ACR managed-identity configuration."
+                    exit 1
+                  fi
+
+                  if ! az webapp restart --resource-group "$RG" --name "$APP"; then
+                    echo "CRITICAL: Rollback restart failed."
+                    exit 1
+                  fi
+
+                  ROLLBACK_HEALTHY=0
+
+                  for attempt in $(seq 1 12); do
+                    echo "Rollback health check attempt $attempt of 12..."
+
+                    if curl --fail --silent --show-error "$HEALTH_URL"; then
+                      echo "Rollback health check passed."
+                      ROLLBACK_HEALTHY=1
+                      break
+                    fi
+
+                    sleep 10
+                  done
+
+                  if [ "$ROLLBACK_HEALTHY" -ne 1 ]; then
+                    echo "CRITICAL: Rollback completed, but UAT is still unhealthy."
+                  else
+                    echo "Rollback restored the previous image successfully."
+                  fi
+
+                  # Keep the pipeline failed so the unsuccessful deployment is visible.
+                  exit 1
+                fi
+
+                echo "UAT deployment and health check completed successfully."
 
 # STAGE 4: DEPLOY TO PRODUCTION
 - stage: DeployProd
