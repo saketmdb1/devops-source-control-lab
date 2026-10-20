@@ -7,7 +7,7 @@ def test_home_returns_expected_message():
 
     response = client.get("/")
 
-    assert response.status_code == 600
+    assert response.status_code == 200
     assert response.is_json
     assert response.get_json() == {
         "message": "Hello from Azure Container Apps!Deployment Added"
