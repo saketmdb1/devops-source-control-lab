@@ -1,3 +1,8 @@
+from azure.monitor.opentelemetry import configure_azure_monitor
+#Initialize Application Insights before importing Flask
+configure_azure_monitor(
+    enable_live_metrics=True
+)
 
 from flask import Flask, jsonify
 
