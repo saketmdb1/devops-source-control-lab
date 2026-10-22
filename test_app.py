@@ -6,7 +6,7 @@ def test_home():
     client = app.test_client()
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json["message"] == "Hello from Azure Container Apps!Rollack check for UAT2Id24"
+    assert response.json["message"] == "Hello from Azure Container Apps!Deployment Added"
 
 def test_health():
     client = app.test_client()
