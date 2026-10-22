@@ -56,18 +56,24 @@ stages:
     - script: |
         python -m pip install --upgrade pip
         python -m pip install -r requirements.txt
-      displayName: 'Install test dependencies'
+        python -m pip install pip-audit
+      displayName: 'Install test and audit dependencies'
+
+    - script: |
+        pip-audit -r requirements.txt
+      displayName: 'Audit Python dependencies'
+
 
     - script: |
         python -m pytest -v test_app.py
       displayName: 'Run unit tests'
 
-    # Main branch: publish build ID and latest tags
+    # Build main image locally; do not push yet
     - task: Docker@2
-      displayName: 'Build and push main image'
+      displayName: 'Build main image'
       condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
       inputs:
-        command: 'buildAndPush'
+        command: 'build'
         containerRegistry: '$(acrServiceConnection)'
         repository: '$(imageRepository)'
         Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
@@ -76,12 +82,12 @@ stages:
           $(Build.BuildId)
           latest
 
-    # Release branch: publish build ID and version tags
+    # Build release image locally; do not push yet
     - task: Docker@2
-      displayName: 'Build and push release image'
+      displayName: 'Build release image'
       condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
       inputs:
-        command: 'buildAndPush'
+        command: 'build'
         containerRegistry: '$(acrServiceConnection)'
         repository: '$(imageRepository)'
         Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
@@ -90,6 +96,43 @@ stages:
           $(Build.BuildId)
           $(Build.SourceBranchName)
 
+    # Install Trivy and scan the local image before publishing it
+    - script: |
+        set -euo pipefail
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+          | sudo sh -s -- -b /usr/local/bin
+
+        trivy image \
+          --severity HIGH,CRITICAL \
+          --exit-code 1 \
+          --ignore-unfixed \
+          "$(imageRepository):$(Build.BuildId)"
+      displayName: 'Scan image with Trivy'
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')))
+
+    # Push main image only after the scan succeeds
+    - task: Docker@2
+      displayName: 'Push main image'
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+      inputs:
+        command: 'push'
+        containerRegistry: '$(acrServiceConnection)'
+        repository: '$(imageRepository)'
+        tags: |
+          $(Build.BuildId)
+          latest
+
+    # Push release image only after the scan succeeds
+    - task: Docker@2
+      displayName: 'Push release image'
+      condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
+      inputs:
+        command: 'push'
+        containerRegistry: '$(acrServiceConnection)'
+        repository: '$(imageRepository)'
+        tags: |
+          $(Build.BuildId)
+          $(Build.SourceBranchName)
 
 # ============================================================
 # STAGE 2: DEPLOY MAIN TO DEVELOPMENT APP SERVICE
