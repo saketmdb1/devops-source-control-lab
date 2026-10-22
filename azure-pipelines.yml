@@ -56,7 +56,13 @@ stages:
     - script: |
         python -m pip install --upgrade pip
         python -m pip install -r requirements.txt
-      displayName: 'Install test dependencies'
+        python -m pip install pip-audit
+      displayName: 'Install test and audit dependencies'
+
+    - script: |
+        pip-audit -r requirements.txt
+      displayName: 'Audit Python dependencies'
+
 
     - script: |
         python -m pytest -v test_app.py
