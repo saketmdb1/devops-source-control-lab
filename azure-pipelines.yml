@@ -249,11 +249,40 @@ stages:
                 exit 1
 
 
+# STAGE 4: POST-DEPLOYMENT UAT INTEGRATION TESTS
+- stage: UATIntegrationTests
+  displayName: 'UAT Integration Tests'
+  dependsOn: DeployUAT
+  condition: succeeded()
+
+  jobs:
+  - job: RunIntegrationTests
+    displayName: 'Test live UAT endpoints'
+
+    steps:
+    - checkout: self
+
+    - task: UsePythonVersion@0
+      displayName: 'Set up Python'
+      inputs:
+        versionSpec: '$(pythonVersion)'
+
+    - script: |
+        python -m pip install --upgrade pip
+        python -m pip install pytest requests
+      displayName: 'Install integration test dependencies'
+
+    - script: |
+        python -m pytest -v test_integration.py
+      displayName: 'Run live UAT integration tests'
+      env:
+        UAT_BASE_URL: https://$(webAppUatName).azurewebsites.net
+
 
 # STAGE 4: DEPLOY TO PRODUCTION
 - stage: DeployProd
   displayName: 'Deploy to Production'
-  dependsOn: DeployUAT
+  dependsOn: UATIntegrationTests
   condition: and(
     succeeded(),
     eq(variables['Build.SourceBranch'], 'refs/heads/main')
