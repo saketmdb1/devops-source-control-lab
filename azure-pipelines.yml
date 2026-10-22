@@ -56,7 +56,7 @@ stages:
       displayName: 'Install test dependencies'
 
     - script: |
-        python -m pytest -v
+        python -m pytest -v test_app.py
       displayName: 'Run unit tests'
 
     # Main branch: publish build ID and latest tags
@@ -273,6 +273,8 @@ stages:
       displayName: 'Install integration test dependencies'
 
     - script: |
+        python -m pip install --upgrade pip
+        python -m pip install requests
         python -m pytest -v test_integration.py
       displayName: 'Run live UAT integration tests'
       env:
