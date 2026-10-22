@@ -1,25 +1,17 @@
+import logging
 import os
 
-# Enable Application Insights only when a connection string is configured.
+logging.basicConfig(level=logging.INFO)
+
 if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
     from azure.monitor.opentelemetry import configure_azure_monitor
 
+    logging.info("Initializing Azure Monitor OpenTelemetry")
     configure_azure_monitor(enable_live_metrics=True)
+    logging.info("Azure Monitor initialization completed")
+else:
+    logging.warning("Application Insights connection string is missing")
 
-from flask import Flask, jsonify
+import flask
 
-app = Flask(__name__)
-
-
-@app.route("/")
-def home():
-    return jsonify(message="Hello from Azure Container Apps! Deployment Added")
-
-
-@app.route("/health")
-def health():
-    return jsonify(status="healthy"), 200
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+app = flask.Flask(__name__)
