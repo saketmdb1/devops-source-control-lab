@@ -52,7 +52,7 @@ stages:
 
     - script: |
         python -m pip install --upgrade pip
-        python -m pip install Flask pytest
+        python -m pip install -r requirements.txt
       displayName: 'Install test dependencies'
 
     - script: |
