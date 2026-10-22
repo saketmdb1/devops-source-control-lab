@@ -1,4 +1,3 @@
-
 import os
 import requests
 
@@ -11,7 +10,7 @@ def test_uat_home_endpoint():
 
     assert response.status_code == 200
     assert response.json()["message"] == (
-        "Hello from Azure Container Apps!Deployment Added"
+        "Hello from Azure Container Apps! Deployment Added"
     )
 
 
