@@ -28,10 +28,6 @@ def home():
 def health():
     return jsonify(status="healthy"), 200
 
-@app.route("/test-error")
-def test_error():
-    raise RuntimeError("Demo exception for Application Insights")
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
