@@ -12,6 +12,22 @@ if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
 else:
     logging.warning("Application Insights connection string is missing")
 
-import flask
+from flask import Flask, jsonify
 
-app = flask.Flask(__name__)
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+    return jsonify(
+        message="Hello from Azure Container Apps! Deployment Added"
+    )
+
+
+@app.route("/health")
+def health():
+    return jsonify(status="healthy"), 200
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000)
