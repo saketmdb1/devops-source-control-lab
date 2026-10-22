@@ -1,8 +1,10 @@
-from azure.monitor.opentelemetry import configure_azure_monitor
-#Initialize Application Insights before importing Flask,
-configure_azure_monitor(
-    enable_live_metrics=True
-)
+import os
+
+# Enable Application Insights only when a connection string is configured.
+if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
+    from azure.monitor.opentelemetry import configure_azure_monitor
+
+    configure_azure_monitor(enable_live_metrics=True)
 
 from flask import Flask, jsonify
 
@@ -11,7 +13,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return jsonify(message="Hello from Azure Container Apps!Deployment Added")
+    return jsonify(message="Hello from Azure Container Apps! Deployment Added")
 
 
 @app.route("/health")
