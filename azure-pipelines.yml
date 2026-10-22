@@ -28,6 +28,9 @@ variables:
   webAppDevName: 'as-devops-dev'
   webAppUatName: 'as-devops-uat'
   webAppProdName: 'as-devops-prod'
+  
+  #UAT Base URL
+  uatBaseUrl: 'https://as-devops-uat-gmhfgydzfrcrfgay.centralindia-01.azurewebsites.net'
 
 stages:
 
@@ -278,7 +281,7 @@ stages:
         python -m pytest -v test_integration.py
       displayName: 'Run live UAT integration tests'
       env:
-        UAT_BASE_URL: https://$(webAppUatName).azurewebsites.net
+        UAT_BASE_URL: $(uatBaseUrl)
 
 
 # STAGE 4: DEPLOY TO PRODUCTION
