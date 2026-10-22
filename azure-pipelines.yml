@@ -128,6 +128,37 @@ stages:
         fi
       displayName: 'Push scanned image to ACR'
       condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')))
+  
+    # Generate traceability metadata after the image is pushed
+    - script: |
+        set -euo pipefail
+
+        mkdir -p "$(Build.ArtifactStagingDirectory)/provenance"
+
+        IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.BuildId)"
+
+        cat > "$(Build.ArtifactStagingDirectory)/provenance/build-metadata.json" <<EOF
+        {
+          "buildId": "$(Build.BuildId)",
+          "sourceVersion": "$(Build.SourceVersion)",
+          "sourceBranch": "$(Build.SourceBranch)",
+          "repository": "$(Build.Repository.Name)",
+          "image": "$IMAGE"
+        }
+        EOF
+
+        cat "$(Build.ArtifactStagingDirectory)/provenance/build-metadata.json"
+      displayName: 'Generate image provenance metadata'
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')))
+
+    # Publish metadata separately from the Docker image in ACR
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish provenance metadata'
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')))
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)/provenance'
+        artifact: 'image-provenance'
+        publishLocation: 'pipeline'
 
 # ============================================================
 # STAGE 2: DEPLOY MAIN TO DEVELOPMENT APP SERVICE
