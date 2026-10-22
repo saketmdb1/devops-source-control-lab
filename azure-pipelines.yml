@@ -68,71 +68,56 @@ stages:
         python -m pytest -v test_app.py
       displayName: 'Run unit tests'
 
-    # Build main image locally; do not push yet
+    # Authenticate Docker to ACR for main/release builds.
     - task: Docker@2
-      displayName: 'Build main image'
-      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+      displayName: 'Log in to ACR'
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')))
       inputs:
-        command: 'build'
+        command: 'login'
         containerRegistry: '$(acrServiceConnection)'
-        repository: '$(imageRepository)'
-        Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
-        buildContext: '$(Build.SourcesDirectory)'
-        tags: |
-          $(Build.BuildId)
-          latest
 
-    # Build release image locally; do not push yet
-    - task: Docker@2
-      displayName: 'Build release image'
-      condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
-      inputs:
-        command: 'build'
-        containerRegistry: '$(acrServiceConnection)'
-        repository: '$(imageRepository)'
-        Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
-        buildContext: '$(Build.SourcesDirectory)'
-        tags: |
-          $(Build.BuildId)
-          $(Build.SourceBranchName)
+    # Build the exact fully-qualified image tag that Trivy will scan.
+    - script: |
+        set -euo pipefail
+        IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.BuildId)"
+        echo "Building image: $IMAGE"
+        docker build --file "$(Build.SourcesDirectory)/Dockerfile" --tag "$IMAGE" "$(Build.SourcesDirectory)"
+        echo "Confirming local image exists:"
+        docker image inspect "$IMAGE"
+      displayName: 'Build Docker image for scanning'
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')))
 
-    # Install Trivy and scan the local image before publishing it
+    # Scan the same fully-qualified local image before pushing it to ACR.
     - script: |
         set -euo pipefail
         curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
           | sudo sh -s -- -b /usr/local/bin
 
+        IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.BuildId)"
+        echo "Scanning image: $IMAGE"
         trivy image \
           --severity HIGH,CRITICAL \
           --exit-code 1 \
           --ignore-unfixed \
-          "$(imageRepository):$(Build.BuildId)"
+          "$IMAGE"
       displayName: 'Scan image with Trivy'
       condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')))
 
-    # Push main image only after the scan succeeds
-    - task: Docker@2
-      displayName: 'Push main image'
-      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-      inputs:
-        command: 'push'
-        containerRegistry: '$(acrServiceConnection)'
-        repository: '$(imageRepository)'
-        tags: |
-          $(Build.BuildId)
-          latest
+    # Push only after Trivy succeeds.
+    - script: |
+        set -euo pipefail
+        IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.BuildId)"
+        docker push "$IMAGE"
 
-    # Push release image only after the scan succeeds
-    - task: Docker@2
-      displayName: 'Push release image'
-      condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
-      inputs:
-        command: 'push'
-        containerRegistry: '$(acrServiceConnection)'
-        repository: '$(imageRepository)'
-        tags: |
-          $(Build.BuildId)
-          $(Build.SourceBranchName)
+        if [ "$(Build.SourceBranch)" = "refs/heads/main" ]; then
+          docker tag "$IMAGE" "$(registryLoginServer)/$(imageRepository):latest"
+          docker push "$(registryLoginServer)/$(imageRepository):latest"
+        elif [[ "$(Build.SourceBranch)" == refs/heads/release/* ]]; then
+          docker tag "$IMAGE" "$(registryLoginServer)/$(imageRepository):$(Build.SourceBranchName)"
+          docker push "$(registryLoginServer)/$(imageRepository):$(Build.SourceBranchName)"
+        fi
+      displayName: 'Push scanned image to ACR'
+      condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')))
 
 # ============================================================
 # STAGE 2: DEPLOY MAIN TO DEVELOPMENT APP SERVICE
