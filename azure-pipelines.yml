@@ -79,13 +79,23 @@ stages:
     # Build the exact fully-qualified image tag that Trivy will scan.
     - script: |
         set -euo pipefail
+
         IMAGE="$(registryLoginServer)/$(imageRepository):$(Build.BuildId)"
+
         echo "Building image: $IMAGE"
-        docker build --file "$(Build.SourcesDirectory)/Dockerfile" --tag "$IMAGE" "$(Build.SourcesDirectory)"
+
+        docker build \
+          --file "$(Build.SourcesDirectory)/Dockerfile" \
+          --build-arg SOURCE_COMMIT="$(Build.SourceVersion)" \
+          --build-arg BUILD_RUN_ID="$(Build.BuildId)" \
+          --tag "$IMAGE" \
+          "$(Build.SourcesDirectory)"
+
         echo "Confirming local image exists:"
         docker image inspect "$IMAGE"
       displayName: 'Build Docker image for scanning'
       condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')))
+
 
     # Scan the same fully-qualified local image before pushing it to ACR.
     - script: |
